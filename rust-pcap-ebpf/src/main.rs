@@ -22,7 +22,7 @@ const CAPTURE_SIZE: usize = 128;
 pub fn rust_pcap(ctx: SkBuffContext) -> i64 {
     let _ = try_capture(&ctx);
 
-    0
+    -1
 }
 
 fn try_capture(ctx: &SkBuffContext) -> Result<(), i64> {
@@ -34,8 +34,6 @@ fn try_capture(ctx: &SkBuffContext) -> Result<(), i64> {
     if len == 0 {
         return Err(-1);
     }
-
-    let mut bytes = [0u8; CAPTURE_SIZE];
 
     let Ok(byte_length) = ctx.load_bytes(0, &mut bytes) else {
         info!(&ctx, "failed to load bytes");
