@@ -1,0 +1,5 @@
+[target."cfg(all())"]
+runner = "sudo -E"
+
+[unstable]
+build-std = ["core", "compiler_builtins", "alloc"]

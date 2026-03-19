@@ -86,7 +86,7 @@ async fn main() -> anyhow::Result<()> {
         let mut guard = poll.readable();
         let ring_buf = guard.inner_mut();
         while let Some(item) = ring_buf.next() {
-            println!("Received item: {:?}", item.as_array::<256>().unwrap());
+            println!("Received item: {:?}", item);
         }
         guard.clear_ready();
     }

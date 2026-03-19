@@ -1,11 +1,12 @@
 #![no_std]
 #![no_main]
 
-use core::cmp::min;
+use core::{alloc::GlobalAlloc, cell::Cell};
 
 use aya_ebpf::{
+    helpers::generated::bpf_ktime_get_ns,
     macros::{map, socket_filter},
-    maps::RingBuf,
+    maps::{HashMap, RingBuf},
     programs::SkBuffContext,
 };
 use aya_log_ebpf::{debug, info};
@@ -13,47 +14,39 @@ use aya_log_ebpf::{debug, info};
 #[map]
 static DATA: RingBuf = RingBuf::with_byte_size(4096 * 256, 0);
 
-const CAPTURE_SIZE: usize = 256;
+const BIGGER_THAN_ALL_MTUS: usize = 64 * 1024;
+
+const CAPTURE_SIZE: usize = 128;
 
 #[socket_filter]
 pub fn rust_pcap(ctx: SkBuffContext) -> i64 {
-    let protocol = ctx.skb.protocol();
-    info!(&ctx, "received a packet of protocol {}", protocol);
-
-    try_capture(&ctx);
+    let _ = try_capture(&ctx);
 
     0
 }
 
 fn try_capture(ctx: &SkBuffContext) -> Result<(), i64> {
+    let timestamp_ns = unsafe { bpf_ktime_get_ns() };
+    let protocol = ctx.skb.protocol();
+    info!(&ctx, "received a packet of protocol {}", protocol);
     // Check packet length first
     let len = unsafe { (*ctx.skb.skb).len };
     if len == 0 {
         return Err(-1);
     }
 
-    let len = min(CAPTURE_SIZE as u32, len);
+    let mut bytes = [0u8; CAPTURE_SIZE];
 
-    let bytes = [0u8; CAPTURE_SIZE];
-    let dst = bytes.as_ptr();
-
-    let ret = unsafe {
-        aya_ebpf::helpers::bpf_skb_load_bytes(ctx.skb.skb as *const _, 0, dst as *mut _, len as u32)
-    };
-
-    if ret < 0 {
-        info!(&ctx, "failed to load bytes: {}", ret);
-        return Err(ret as i64);
-    }
-
-    let Some(mut buf) = DATA.reserve_bytes(len as usize, 0) else {
-        debug!(&ctx, "failed to reserve buffer");
+    let Ok(byte_length) = ctx.load_bytes(0, &mut bytes) else {
+        info!(&ctx, "failed to load bytes");
         return Err(-1);
     };
 
-    buf.copy_from_slice(&bytes);
+    if let Err(e) = DATA.output::<[u8]>(&bytes[..byte_length], 0) {
+        info!(&ctx, "failed to output bytes: {}", e);
+        return Err(-1);
+    }
 
-    buf.submit(0);
     debug!(&ctx, "Submitted packet to buffer");
     Ok(())
 }

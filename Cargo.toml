@@ -1,10 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    "rust-pcap",
-    "rust-pcap-common",
-    "rust-pcap-ebpf",
-]
+members = ["rust-pcap", "rust-pcap-common", "rust-pcap-ebpf"]
 default-members = ["rust-pcap", "rust-pcap-common"]
 
 [workspace.package]
@@ -31,6 +27,9 @@ tokio = { version = "1.40.0", default-features = false }
 which = { version = "6.0.0", default-features = false }
 hex = { version = "0.4", default-features = false }
 socket2 = { version = "0.6" }
+facet_postcard = { version = "0.44", default-features = false }
+facet = { version = "0.44", default-features = false }
+serde = { version = "1", default-features = false }
 
 [profile.release.package.rust-pcap-ebpf]
 debug = 2
