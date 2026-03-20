@@ -1,3 +1,5 @@
+use std::io::{Error, ErrorKind};
+
 use aya::{
     maps::{HashMap, RingBuf},
     programs::SocketFilter,
@@ -6,27 +8,13 @@ use libc::htons;
 #[rustfmt::skip]
 use log::{debug, warn};
 use socket2::{Domain, Protocol, Type};
-use tokio::signal;
+use tokio::{
+    io::{Interest, unix::AsyncFd},
+    signal,
+};
 
 const ETH_P_ALL: u16 = 0x003;
-struct PollFd<T>(T);
-fn poll_fd<T>(t: T) -> PollFd<T> {
-    PollFd(t)
-}
-impl<T> PollFd<T> {
-    fn readable(&mut self) -> Guard<'_, T> {
-        Guard(self)
-    }
-}
-struct Guard<'a, T>(&'a mut PollFd<T>);
 
-impl<T> Guard<'_, T> {
-    fn inner_mut(&mut self) -> &mut T {
-        let Guard(PollFd(t)) = self;
-        t
-    }
-    fn clear_ready(&mut self) {}
-}
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
@@ -80,15 +68,28 @@ async fn main() -> anyhow::Result<()> {
     prog.attach(&listener)?;
 
     let ring_buf = RingBuf::try_from(ebpf.map_mut("DATA").unwrap()).unwrap();
-    let mut poll = poll_fd(ring_buf);
+    let mut packet_buffer = AsyncFd::with_interest(ring_buf, Interest::READABLE).unwrap();
 
     loop {
-        let mut guard = poll.readable();
-        let ring_buf = guard.inner_mut();
-        while let Some(item) = ring_buf.next() {
-            println!("Received item: {:?}", item);
-        }
-        guard.clear_ready();
+        let mut guard = packet_buffer.readable_mut().await?;
+        match guard.try_io(|inner| {
+            let mut data = vec![];
+            let ringbuf_entry = inner
+                .get_mut()
+                .next()
+                .ok_or(Error::other("AsyncFd returned none despite being readable"))?;
+            let len = u32::from_le_bytes(*ringbuf_entry.first_chunk::<4>().unwrap());
+            data.extend_from_slice(&ringbuf_entry[..len as usize]);
+            Ok(data)
+        }) {
+            Ok(Ok(data)) => {
+                println!("Data length: {}", data.len());
+            }
+            Ok(e) => {
+                //println!("Error getting ringbuf entry: {e:?}")
+            }
+            Err(e) => println!("Error reading from ringbuf: {e:?}"),
+        };
     }
 
     let ctrl_c = signal::ctrl_c();

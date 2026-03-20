@@ -1,51 +1,59 @@
 #![no_std]
 #![no_main]
-
-use core::{alloc::GlobalAlloc, cell::Cell};
+use core::cmp::min;
 
 use aya_ebpf::{
-    helpers::generated::bpf_ktime_get_ns,
     macros::{map, socket_filter},
-    maps::{HashMap, RingBuf},
+    maps::RingBuf,
     programs::SkBuffContext,
 };
-use aya_log_ebpf::{debug, info};
+use aya_log_ebpf::debug;
 
 #[map]
-static DATA: RingBuf = RingBuf::with_byte_size(4096 * 256, 0);
+static DATA: RingBuf = RingBuf::with_byte_size(4096 * 4096, 0);
 
-const BIGGER_THAN_ALL_MTUS: usize = 64 * 1024;
-
-const CAPTURE_SIZE: usize = 128;
+const MAX_PACKET_SIZE: usize = 64 * 1024;
 
 #[socket_filter]
 pub fn rust_pcap(ctx: SkBuffContext) -> i64 {
-    let _ = try_capture(&ctx);
-
-    -1
+    match try_capture(&ctx) {
+        Ok(()) => 0,
+        Err(_) => 0,
+    }
 }
 
 fn try_capture(ctx: &SkBuffContext) -> Result<(), i64> {
-    let timestamp_ns = unsafe { bpf_ktime_get_ns() };
-    let protocol = ctx.skb.protocol();
-    info!(&ctx, "received a packet of protocol {}", protocol);
-    // Check packet length first
-    let len = unsafe { (*ctx.skb.skb).len };
+    let len = min(unsafe { (*ctx.skb.skb).len } as usize, MAX_PACKET_SIZE);
     if len == 0 {
         return Err(-1);
     }
 
-    let Ok(byte_length) = ctx.load_bytes(0, &mut bytes) else {
-        info!(&ctx, "failed to load bytes");
+    let Some(mut buf) = DATA.reserve_bytes(MAX_PACKET_SIZE + 4, 0) else {
         return Err(-1);
     };
 
-    if let Err(e) = DATA.output::<[u8]>(&bytes[..byte_length], 0) {
-        info!(&ctx, "failed to output bytes: {}", e);
-        return Err(-1);
+    let ptr = buf.as_mut_ptr();
+    // Write len to the buffer
+    unsafe {
+        core::ptr::write(ptr as *mut u32, len as u32);
     }
 
-    debug!(&ctx, "Submitted packet to buffer");
+    let ret = unsafe {
+        aya_ebpf::helpers::bpf_skb_load_bytes(
+            ctx.skb.skb as *const _,
+            0,
+            ptr.add(4) as *mut _,
+            len as u32,
+        )
+    };
+
+    if ret < 0 {
+        debug!(&ctx, "bpf_skb_load_bytes failed: {}", ret);
+        buf.discard(0);
+        return Err(ret as i64);
+    }
+
+    buf.submit(0);
     Ok(())
 }
 
