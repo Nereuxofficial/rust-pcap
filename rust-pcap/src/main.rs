@@ -97,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
                 .next()
                 .ok_or(Error::other("AsyncFd returned none despite being readable"))?;
             let len = u32::from_le_bytes(*ringbuf_entry.first_chunk::<4>().unwrap());
-            data.extend_from_slice(&ringbuf_entry[..len as usize]);
+            data.extend_from_slice(&ringbuf_entry[4..len as usize]);
             Ok(data)
         }) {
             Ok(Ok(data)) => {

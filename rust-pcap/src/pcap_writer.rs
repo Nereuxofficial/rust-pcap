@@ -21,7 +21,7 @@ impl PcapWriter {
         // Snaplen
         file.write_u32(u32::MAX).await?;
         // Link type. 1 for ethernet
-        file.write_u32(113).await?;
+        file.write_u32(1).await?;
         Ok(Self { file })
     }
     pub async fn write(&mut self, packet: &Packet) -> Result<(), std::io::Error> {
