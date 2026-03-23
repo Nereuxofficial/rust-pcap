@@ -14,10 +14,10 @@ impl Packet {
         &self,
         writer: &mut T,
     ) -> std::io::Result<()> {
-        writer.write_all(&self.ts_sec.to_be_bytes()).await?;
-        writer.write_all(&self.ts_usec.to_be_bytes()).await?;
-        writer.write_all(&self.incl_len.to_be_bytes()).await?;
-        writer.write_all(&self.orig_len.to_be_bytes()).await?;
+        writer.write_all(&self.ts_sec.to_le_bytes()).await?;
+        writer.write_all(&self.ts_usec.to_le_bytes()).await?;
+        writer.write_all(&self.incl_len.to_le_bytes()).await?;
+        writer.write_all(&self.orig_len.to_le_bytes()).await?;
         writer.write_all(&self.data).await?;
         Ok(())
     }

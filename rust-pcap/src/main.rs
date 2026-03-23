@@ -1,15 +1,9 @@
 mod packet;
 mod pcap_writer;
 
-use std::{
-    io::{Error, ErrorKind},
-    process::exit,
-};
+use std::{io::Error, process::exit};
 
-use aya::{
-    maps::{HashMap, RingBuf},
-    programs::SocketFilter,
-};
+use aya::{maps::RingBuf, programs::SocketFilter};
 use libc::htons;
 use log::error;
 #[rustfmt::skip]
@@ -97,7 +91,30 @@ async fn main() -> anyhow::Result<()> {
                 .next()
                 .ok_or(Error::other("AsyncFd returned none despite being readable"))?;
             let len = u32::from_le_bytes(*ringbuf_entry.first_chunk::<4>().unwrap());
-            data.extend_from_slice(&ringbuf_entry[4..len as usize]);
+
+            let packet_data = &ringbuf_entry[4..len as usize + 4];
+            let protocol: u16 = if !packet_data.is_empty() && (packet_data[0] >> 4) == 4 {
+                0x0800
+            } else if !packet_data.is_empty() && (packet_data[0] >> 4) == 6 {
+                0x86dd
+            } else {
+                0x0000
+            };
+
+            // Construct and append the 16-byte Linux SLL (Cooked Capture) header.
+            // This replaces the stripped Ethernet header for Type::DGRAM captures.
+            // 2 bytes: Packet type (0 = Unicast to host)
+            data.extend_from_slice(&0u16.to_be_bytes());
+            // 2 bytes: ARPHRD_ type (1 = Ethernet)
+            data.extend_from_slice(&1u16.to_be_bytes());
+            // 2 bytes: Link-layer address length (0)
+            data.extend_from_slice(&0u16.to_be_bytes());
+            // 8 bytes: Link-layer address (padded with 0s)
+            data.extend_from_slice(&[0u8; 8]);
+            // 2 bytes: Protocol (EtherType)
+            data.extend_from_slice(&protocol.to_be_bytes());
+
+            data.extend_from_slice(packet_data);
             Ok(data)
         }) {
             Ok(Ok(data)) => {
@@ -115,11 +132,9 @@ async fn main() -> anyhow::Result<()> {
                 };
             }
             Ok(e) => {
-                //println!("Error getting ringbuf entry: {e:?}")
+                debug!("Error getting ringbuf entry: {e:?}")
             }
-            Err(e) => println!("Error reading from ringbuf: {e:?}"),
+            Err(e) => debug!("Error reading from ringbuf: {e:?}"),
         };
     }
-
-    Ok(())
 }
