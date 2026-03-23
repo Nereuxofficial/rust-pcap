@@ -1,15 +1,9 @@
 mod packet;
 mod pcap_writer;
 
-use std::{
-    io::{Error, ErrorKind},
-    process::exit,
-};
+use std::{io::Error, process::exit};
 
-use aya::{
-    maps::{HashMap, RingBuf},
-    programs::SocketFilter,
-};
+use aya::{maps::RingBuf, programs::SocketFilter};
 use libc::htons;
 use log::error;
 #[rustfmt::skip]
@@ -97,7 +91,23 @@ async fn main() -> anyhow::Result<()> {
                 .next()
                 .ok_or(Error::other("AsyncFd returned none despite being readable"))?;
             let len = u32::from_le_bytes(*ringbuf_entry.first_chunk::<4>().unwrap());
-            data.extend_from_slice(&ringbuf_entry[4..len as usize]);
+
+            let packet_data = &ringbuf_entry[4..len as usize + 4];
+            let protocol: u16 = if !packet_data.is_empty() && (packet_data[0] >> 4) == 4 {
+                0x0800
+            } else if !packet_data.is_empty() && (packet_data[0] >> 4) == 6 {
+                0x86dd
+            } else {
+                0x0000
+            };
+
+            data.extend_from_slice(&0u16.to_be_bytes());
+            data.extend_from_slice(&1u16.to_be_bytes());
+            data.extend_from_slice(&0u16.to_be_bytes());
+            data.extend_from_slice(&[0u8; 8]);
+            data.extend_from_slice(&protocol.to_be_bytes());
+
+            data.extend_from_slice(packet_data);
             Ok(data)
         }) {
             Ok(Ok(data)) => {
