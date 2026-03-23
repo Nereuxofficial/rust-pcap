@@ -1,10 +1,17 @@
-use std::io::{Error, ErrorKind};
+mod packet;
+mod pcap_writer;
+
+use std::{
+    io::{Error, ErrorKind},
+    process::exit,
+};
 
 use aya::{
     maps::{HashMap, RingBuf},
     programs::SocketFilter,
 };
 use libc::htons;
+use log::error;
 #[rustfmt::skip]
 use log::{debug, warn};
 use socket2::{Domain, Protocol, Type};
@@ -12,6 +19,8 @@ use tokio::{
     io::{Interest, unix::AsyncFd},
     signal,
 };
+
+use crate::{packet::Packet, pcap_writer::PcapWriter};
 
 const ETH_P_ALL: u16 = 0x003;
 
@@ -70,6 +79,15 @@ async fn main() -> anyhow::Result<()> {
     let ring_buf = RingBuf::try_from(ebpf.map_mut("DATA").unwrap()).unwrap();
     let mut packet_buffer = AsyncFd::with_interest(ring_buf, Interest::READABLE).unwrap();
 
+    let mut file_writer = PcapWriter::new("file.pcap").await.unwrap();
+    tokio::spawn(async move {
+        let ctrl_c = signal::ctrl_c();
+        println!("Waiting for Ctrl-C...");
+        ctrl_c.await.unwrap();
+        println!("Exiting...");
+        exit(0);
+    });
+
     loop {
         let mut guard = packet_buffer.readable_mut().await?;
         match guard.try_io(|inner| {
@@ -83,7 +101,18 @@ async fn main() -> anyhow::Result<()> {
             Ok(data)
         }) {
             Ok(Ok(data)) => {
-                println!("Data length: {}", data.len());
+                if let Err(e) = file_writer
+                    .write(&Packet {
+                        ts_sec: 0,
+                        ts_usec: 0,
+                        incl_len: data.len() as u32,
+                        orig_len: data.len() as u32,
+                        data,
+                    })
+                    .await
+                {
+                    error!("Packet dropped: {e}");
+                };
             }
             Ok(e) => {
                 //println!("Error getting ringbuf entry: {e:?}")
@@ -91,11 +120,6 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => println!("Error reading from ringbuf: {e:?}"),
         };
     }
-
-    let ctrl_c = signal::ctrl_c();
-    println!("Waiting for Ctrl-C...");
-    ctrl_c.await?;
-    println!("Exiting...");
 
     Ok(())
 }

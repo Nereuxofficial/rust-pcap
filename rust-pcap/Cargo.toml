@@ -20,6 +20,8 @@ tokio = { workspace = true, features = [
     "rt-multi-thread",
     "net",
     "signal",
+    "fs",
+    "io-util"
 ] }
 socket2 = { workspace = true }
 
