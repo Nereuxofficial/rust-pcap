@@ -1,4 +1,5 @@
 # rust-pcap
+> PCAP capturing via Rust with zero C dependencies based on [aya](https://github.com/aya-rs/aya)
 
 ## Prerequisites
 
