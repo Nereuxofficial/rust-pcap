@@ -3,6 +3,7 @@
 use core::cmp::min;
 
 use aya_ebpf::{
+    helpers::generated::bpf_ktime_get_ns,
     macros::{map, socket_filter},
     maps::RingBuf,
     programs::SkBuffContext,
@@ -23,26 +24,29 @@ pub fn rust_pcap(ctx: SkBuffContext) -> i64 {
 }
 
 fn try_capture(ctx: &SkBuffContext) -> Result<(), i64> {
+    let timestamp_ns = unsafe { bpf_ktime_get_ns() };
+
     let len = min(unsafe { (*ctx.skb.skb).len } as usize, MAX_PACKET_SIZE);
     if len == 0 {
         return Err(-1);
     }
 
-    let Some(mut buf) = DATA.reserve_bytes(MAX_PACKET_SIZE + 4, 0) else {
+    let Some(mut buf) = DATA.reserve_bytes(8 + 4 + MAX_PACKET_SIZE, 0) else {
         return Err(-1);
     };
 
     let ptr = buf.as_mut_ptr();
     // Write len to the buffer
     unsafe {
-        core::ptr::write(ptr as *mut u32, len as u32);
+        core::ptr::write(ptr as *mut u64, timestamp_ns);
+        core::ptr::write(ptr.add(8) as *mut u32, len as u32);
     }
 
     let ret = unsafe {
         aya_ebpf::helpers::bpf_skb_load_bytes(
             ctx.skb.skb as *const _,
             0,
-            ptr.add(4) as *mut _,
+            ptr.add(12) as *mut _,
             len as u32,
         )
     };

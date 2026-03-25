@@ -90,9 +90,10 @@ async fn main() -> anyhow::Result<()> {
                 .get_mut()
                 .next()
                 .ok_or(Error::other("AsyncFd returned none despite being readable"))?;
-            let len = u32::from_le_bytes(*ringbuf_entry.first_chunk::<4>().unwrap());
+            let timestamp_ns = u64::from_le_bytes(*ringbuf_entry.first_chunk::<8>().unwrap());
+            let len = u32::from_le_bytes(ringbuf_entry[8..12].try_into().unwrap());
 
-            let packet_data = &ringbuf_entry[4..len as usize + 4];
+            let packet_data = &ringbuf_entry[12..len as usize + 12];
             let protocol: u16 = if !packet_data.is_empty() && (packet_data[0] >> 4) == 4 {
                 0x0800
             } else if !packet_data.is_empty() && (packet_data[0] >> 4) == 6 {
@@ -115,13 +116,13 @@ async fn main() -> anyhow::Result<()> {
             data.extend_from_slice(&protocol.to_be_bytes());
 
             data.extend_from_slice(packet_data);
-            Ok(data)
+            Ok((timestamp_ns, data))
         }) {
-            Ok(Ok(data)) => {
+            Ok(Ok((timestamp_ns, data))) => {
                 if let Err(e) = file_writer
                     .write(&Packet {
-                        ts_sec: 0,
-                        ts_usec: 0,
+                        ts_sec: (timestamp_ns / 1_000_000) as u32,
+                        ts_usec: (timestamp_ns % 1_000_000) as u32,
                         incl_len: data.len() as u32,
                         orig_len: data.len() as u32,
                         data,
@@ -132,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
                 };
             }
             Ok(e) => {
-                debug!("Error getting ringbuf entry: {e:?}")
+                //debug!("Error getting ringbuf entry: {e:?}")
             }
             Err(e) => debug!("Error reading from ringbuf: {e:?}"),
         };
