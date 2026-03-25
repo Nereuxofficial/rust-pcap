@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+# Limit default permissions of the GITHUB_TOKEN
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_and_lint:
+    name: Build and Lint
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install system dependencies
+        run: |
+          apt-get update && apt-get install -y curl git build-essential pkg-config wget lsb-release gnupg
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          ./llvm.sh 21
+          echo "LLVM_PREFIX=/usr/lib/llvm-21" >> $GITHUB_ENV
+          echo "/usr/lib/llvm-21/bin" >> $GITHUB_PATH
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Install Rust nightly (required for eBPF)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, rustfmt, clippy
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install bpf-linker
+        run: cargo install bpf-linker --no-default-features --features llvm-21
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Build project
+        run: cargo build --workspace --all-targets
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
+      - name: Run tests with nextest
+        run: cargo nextest run --workspace --all-features
