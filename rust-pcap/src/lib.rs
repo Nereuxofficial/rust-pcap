@@ -1,8 +1,6 @@
 pub mod packet;
 pub mod pcap_writer;
 
-use std::io::Error;
-
 use aya::{maps::RingBuf, programs::SocketFilter};
 use libc::htons;
 use log::{debug, error, warn};
@@ -13,8 +11,11 @@ use crate::{packet::Packet, pcap_writer::PcapWriter};
 
 const ETH_P_ALL: u16 = 0x003;
 
+static EBPF_BYTES: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/rust-pcap"));
+
 /// Start capturing packets and write them to the specified PCAP file.
-pub async fn run_capture(filename: &str, ebpf_bytes: &[u8]) -> anyhow::Result<()> {
+pub async fn run_capture(filename: &str) -> anyhow::Result<()> {
+    let ebpf_bytes: &[u8] = EBPF_BYTES;
     // Bump the memlock rlimit. This is needed for older kernels that don't use the
     // new memcg based accounting, see https://lwn.net/Articles/837122/
     let rlim = libc::rlimit {
@@ -108,7 +109,9 @@ pub async fn run_capture(filename: &str, ebpf_bytes: &[u8]) -> anyhow::Result<()
             }
             Ok(Err(e)) => {
                 // Should only be WouldBlock
-                debug!("try_io error: {e:?}");
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    warn!("Unexpected try_io error: {e:?}");
+                }
             }
             Err(_e) => {
                 // WouldBlock handled by try_io mechanism to clear ready flag

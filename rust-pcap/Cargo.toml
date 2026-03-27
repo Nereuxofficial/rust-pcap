@@ -17,13 +17,12 @@ log = { workspace = true }
 tokio = { workspace = true, features = [
     "macros",
     "rt",
-    "rt-multi-thread",
     "net",
     "signal",
     "fs",
     "io-util"
 ] }
-socket2 = { workspace = true }
+socket2 = { workspace = true, features = ["all"] }
 
 [build-dependencies]
 anyhow = { workspace = true }

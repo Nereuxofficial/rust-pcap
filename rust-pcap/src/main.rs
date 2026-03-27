@@ -2,7 +2,7 @@ use std::{env, process::exit};
 
 use tokio::signal;
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
@@ -10,13 +10,11 @@ async fn main() -> anyhow::Result<()> {
     if args.len() < 2 {
         eprintln!(
             "Usage: {} <output.pcap>",
-            args.get(0).unwrap_or(&"rust-pcap".to_string())
+            args.first().unwrap_or(&"rust-pcap".to_string())
         );
         exit(1);
     }
     let filename = &args[1];
-
-    let ebpf_bytes = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/rust-pcap"));
 
     tokio::spawn(async move {
         let ctrl_c = signal::ctrl_c();
@@ -27,7 +25,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     println!("Starting capture, writing to {}", filename);
-    rust_pcap::run_capture(filename, ebpf_bytes).await?;
+    rust_pcap::run_capture(filename).await?;
 
     Ok(())
 }
