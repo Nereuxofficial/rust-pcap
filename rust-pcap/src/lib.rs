@@ -1,17 +1,12 @@
+pub mod capture;
+pub mod device;
 pub mod packet;
 pub mod pcap_writer;
 
-use aya::{maps::RingBuf, programs::SocketFilter};
-use libc::htons;
-use log::{debug, error, warn};
-use socket2::{Domain, Protocol, Type};
-use tokio::io::{Interest, unix::AsyncFd};
+pub(crate) const ETH_P_ALL: u16 = 0x003;
 
-use crate::{packet::Packet, pcap_writer::PcapWriter};
-
-const ETH_P_ALL: u16 = 0x003;
-
-static EBPF_BYTES: &[u8] = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/rust-pcap"));
+pub(crate) static EBPF_BYTES: &[u8] =
+    aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/rust-pcap"));
 
 /// Parse a ring buffer entry into a (timestamp_ns, packet_data) pair.
 /// Entry layout: [timestamp: u64 LE][len: u32 LE][data: len bytes]
@@ -48,98 +43,6 @@ pub fn ns_to_ts(ns: u64) -> (u32, u32) {
         (ns / 1_000_000_000) as u32,
         ((ns % 1_000_000_000) / 1000) as u32,
     )
-}
-
-/// Start capturing packets and write them to the specified PCAP file.
-pub async fn run_capture(filename: &str) -> anyhow::Result<()> {
-    let ebpf_bytes: &[u8] = EBPF_BYTES;
-    // Bump the memlock rlimit. This is needed for older kernels that don't use the
-    // new memcg based accounting, see https://lwn.net/Articles/837122/
-    let rlim = libc::rlimit {
-        rlim_cur: libc::RLIM_INFINITY,
-        rlim_max: libc::RLIM_INFINITY,
-    };
-    let ret = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlim) };
-    if ret != 0 {
-        debug!("remove limit on locked memory failed, ret is: {ret}");
-    }
-
-    let mut ebpf = aya::Ebpf::load(ebpf_bytes)?;
-
-    match aya_log::EbpfLogger::init(&mut ebpf) {
-        Err(e) => {
-            warn!("failed to initialize eBPF logger: {e}");
-        }
-        Ok(logger) => {
-            let mut logger =
-                tokio::io::unix::AsyncFd::with_interest(logger, tokio::io::Interest::READABLE)?;
-            tokio::task::spawn(async move {
-                loop {
-                    let mut guard = logger.readable_mut().await.unwrap();
-                    guard.get_inner_mut().flush();
-                    guard.clear_ready();
-                }
-            });
-        }
-    }
-
-    let listener = socket2::Socket::new(
-        Domain::PACKET,
-        Type::DGRAM,
-        Some(Protocol::from(htons(ETH_P_ALL) as i32)),
-    )
-    .map_err(|e| anyhow::anyhow!("failed to create socket: {e}"))?;
-
-    let prog: &mut SocketFilter = ebpf.program_mut("rust_pcap").unwrap().try_into()?;
-    prog.load()?;
-    prog.attach(&listener)?;
-
-    let ring_buf = RingBuf::try_from(ebpf.map_mut("DATA").unwrap()).unwrap();
-    let mut packet_buffer = AsyncFd::with_interest(ring_buf, Interest::READABLE).unwrap();
-
-    let file = tokio::fs::File::create(filename).await?;
-    let mut file_writer = PcapWriter::new(file).await?;
-
-    loop {
-        let mut guard = packet_buffer.readable_mut().await?;
-        match guard.try_io(|inner| {
-            let ringbuf_entry = inner
-                .get_mut()
-                .next()
-                .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::WouldBlock))?;
-
-            let (timestamp_ns, packet_data) = parse_ring_entry(&ringbuf_entry);
-            let protocol = detect_ethertype(packet_data);
-            let mut data = build_sll_header(protocol).to_vec();
-            data.extend_from_slice(packet_data);
-            Ok((timestamp_ns, data))
-        }) {
-            Ok(Ok((timestamp_ns, data))) => {
-                let (ts_sec, ts_usec) = ns_to_ts(timestamp_ns);
-                if let Err(e) = file_writer
-                    .write(&Packet {
-                        ts_sec,
-                        ts_usec,
-                        incl_len: data.len() as u32,
-                        orig_len: data.len() as u32,
-                        data,
-                    })
-                    .await
-                {
-                    error!("Packet dropped: {e}");
-                };
-            }
-            Ok(Err(e)) => {
-                // Should only be WouldBlock
-                if e.kind() != std::io::ErrorKind::WouldBlock {
-                    warn!("Unexpected try_io error: {e:?}");
-                }
-            }
-            Err(_e) => {
-                // WouldBlock handled by try_io mechanism to clear ready flag
-            }
-        };
-    }
 }
 
 #[cfg(test)]
