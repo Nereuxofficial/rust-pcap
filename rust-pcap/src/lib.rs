@@ -44,7 +44,10 @@ pub fn build_sll_header(protocol: u16) -> [u8; 16] {
 
 /// Convert a nanosecond timestamp to (seconds, microseconds).
 pub fn ns_to_ts(ns: u64) -> (u32, u32) {
-    ((ns / 1_000_000_000) as u32, ((ns % 1_000_000_000) / 1000) as u32)
+    (
+        (ns / 1_000_000_000) as u32,
+        ((ns % 1_000_000_000) / 1000) as u32,
+    )
 }
 
 /// Start capturing packets and write them to the specified PCAP file.
@@ -194,13 +197,19 @@ mod tests {
         assert_eq!(u16::from_be_bytes(header[0..2].try_into().unwrap()), 0x0000); // packet type
         assert_eq!(u16::from_be_bytes(header[2..4].try_into().unwrap()), 0x0001); // ARPHRD
         assert_eq!(&header[4..14], &[0u8; 10]); // address length + padding
-        assert_eq!(u16::from_be_bytes(header[14..16].try_into().unwrap()), 0x0800); // EtherType
+        assert_eq!(
+            u16::from_be_bytes(header[14..16].try_into().unwrap()),
+            0x0800
+        ); // EtherType
     }
 
     #[test]
     fn build_sll_header_ipv6_protocol() {
         let header = build_sll_header(0x86dd);
-        assert_eq!(u16::from_be_bytes(header[14..16].try_into().unwrap()), 0x86dd);
+        assert_eq!(
+            u16::from_be_bytes(header[14..16].try_into().unwrap()),
+            0x86dd
+        );
     }
 
     #[test]

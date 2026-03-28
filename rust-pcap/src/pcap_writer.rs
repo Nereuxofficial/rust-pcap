@@ -50,7 +50,10 @@ mod tests {
         let bytes = capture_bytes(&[]).await;
 
         assert_eq!(bytes.len(), 24, "global header must be 24 bytes");
-        assert_eq!(u32::from_le_bytes(bytes[0..4].try_into().unwrap()), 0xa1b2c3d4);
+        assert_eq!(
+            u32::from_le_bytes(bytes[0..4].try_into().unwrap()),
+            0xa1b2c3d4
+        );
         assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 2); // major
         assert_eq!(u16::from_le_bytes(bytes[6..8].try_into().unwrap()), 4); // minor
     }
@@ -64,8 +67,13 @@ mod tests {
 
     #[tokio::test]
     async fn pcap_packet_record_begins_at_byte_24() {
-        let packets =
-            [Packet { ts_sec: 1, ts_usec: 0, incl_len: 2, orig_len: 2, data: vec![0x45, 0x00] }];
+        let packets = [Packet {
+            ts_sec: 1,
+            ts_usec: 0,
+            incl_len: 2,
+            orig_len: 2,
+            data: vec![0x45, 0x00],
+        }];
         let bytes = capture_bytes(&packets).await;
 
         assert_eq!(bytes.len(), 24 + 16 + 2);
@@ -79,8 +87,20 @@ mod tests {
     #[tokio::test]
     async fn pcap_multiple_packets_written_sequentially() {
         let packets = [
-            Packet { ts_sec: 1, ts_usec: 0, incl_len: 1, orig_len: 1, data: vec![0x01] },
-            Packet { ts_sec: 2, ts_usec: 0, incl_len: 1, orig_len: 1, data: vec![0x02] },
+            Packet {
+                ts_sec: 1,
+                ts_usec: 0,
+                incl_len: 1,
+                orig_len: 1,
+                data: vec![0x01],
+            },
+            Packet {
+                ts_sec: 2,
+                ts_usec: 0,
+                incl_len: 1,
+                orig_len: 1,
+                data: vec![0x02],
+            },
         ];
         let bytes = capture_bytes(&packets).await;
 

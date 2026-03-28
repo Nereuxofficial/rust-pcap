@@ -75,7 +75,13 @@ mod tests {
 
     #[tokio::test]
     async fn packet_write_empty_data() {
-        let packet = Packet { ts_sec: 0, ts_usec: 0, incl_len: 0, orig_len: 0, data: vec![] };
+        let packet = Packet {
+            ts_sec: 0,
+            ts_usec: 0,
+            incl_len: 0,
+            orig_len: 0,
+            data: vec![],
+        };
         let bytes = write_packet_to_bytes(&packet).await;
         assert_eq!(bytes.len(), 16);
     }
