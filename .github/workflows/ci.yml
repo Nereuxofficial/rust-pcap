@@ -52,12 +52,11 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      # Skipping clippy for now due to linker errors. TODO: Readd clippy to pipeline
-      #- name: Run Clippy
-      #  run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --all-features --exclude rust-pcap-ebpf -- -D warnings
 
       - name: Build project
-        run: cargo build --workspace --all-targets
+        run: cargo build --workspace --all-targets --exclude rust-pcap-ebpf
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -65,4 +64,4 @@ jobs:
           tool: cargo-nextest
 
       - name: Run tests with nextest
-        run: cargo nextest run --workspace --all-features
+        run: cargo nextest run --workspace --all-features --exclude rust-pcap-ebpf
