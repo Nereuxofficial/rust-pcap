@@ -5,10 +5,8 @@ edition.workspace = true
 
 [dependencies]
 rust-pcap-common = { path = "../rust-pcap-common" }
-
 aya-ebpf = { workspace = true }
 aya-log-ebpf = { workspace = true }
-hex = { workspace = true }
 
 [build-dependencies]
 which = { workspace = true }
