@@ -11,11 +11,11 @@
 
 ## Library
 
-`rust-pcap` is first and foremost a library. Add it to your `Cargo.toml`:
+Add `rust-pcap` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-rust-pcap = { path = "..." }  # or git/crates.io once published
+rust-pcap = { git = "https://github.com/Nereuxofficial/rust-pcap" }  # or git/crates.io once published
 tokio = { version = "1", features = ["full"] }
 ```
 
