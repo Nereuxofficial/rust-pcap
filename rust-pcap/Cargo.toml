@@ -14,15 +14,16 @@ aya-log = { workspace = true }
 env_logger = { workspace = true }
 libc = { workspace = true }
 log = { workspace = true }
+socket2 = { workspace = true, features = ["all"] }
 tokio = { workspace = true, features = [
     "macros",
     "rt",
     "net",
     "signal",
     "fs",
-    "io-util"
+    "io-util",
+    "rt-multi-thread"
 ] }
-socket2 = { workspace = true, features = ["all"] }
 
 [build-dependencies]
 anyhow = { workspace = true }

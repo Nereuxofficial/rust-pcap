@@ -3,6 +3,8 @@ pub mod device;
 pub mod packet;
 pub mod pcap_writer;
 
+pub use capture::PacketSink;
+
 pub(crate) const ETH_P_ALL: u16 = 0x003;
 
 pub(crate) static EBPF_BYTES: &[u8] =

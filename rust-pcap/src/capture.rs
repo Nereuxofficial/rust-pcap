@@ -43,6 +43,39 @@ fn bind_to_interface(socket: &socket2::Socket, ifindex: u32) -> std::io::Result<
     }
 }
 
+/// Receives captured packets one at a time.
+///
+/// Implement this trait to handle packets however you like — print them,
+/// forward them over the network, write them to a database, or anything else.
+///
+/// For the common case of writing to a `.pcap` file, use [`Capture::start`]
+/// which provides a ready-made file-backed implementation.
+///
+/// # Example
+///
+/// ```no_run
+/// use rust_pcap::{capture::{Capture, PacketSink}, device::Device, packet::Packet};
+///
+/// struct Counter(u64);
+///
+/// impl PacketSink for Counter {
+///     async fn handle(&mut self, _packet: Packet) -> anyhow::Result<()> {
+///         self.0 += 1;
+///         println!("packets so far: {}", self.0);
+///         Ok(())
+///     }
+/// }
+///
+/// Capture::from_device(Device::any()).run(Counter(0)).await?;
+/// ```
+#[allow(async_fn_in_trait)]
+pub trait PacketSink {
+    /// Called once for every captured packet.
+    ///
+    /// Returning an error logs the packet as dropped and continues the capture.
+    async fn handle(&mut self, packet: Packet) -> anyhow::Result<()>;
+}
+
 /// Builder for a packet capture session.
 ///
 /// # Examples
@@ -56,11 +89,15 @@ fn bind_to_interface(socket: &socket2::Socket, ifindex: u32) -> std::io::Result<
 /// # Ok(()) }
 /// ```
 ///
-/// Capture from all interfaces:
+/// Capture from all interfaces with a custom handler:
 /// ```no_run
-/// # use rust_pcap::{capture::Capture, device::Device};
+/// # use rust_pcap::{capture::{Capture, PacketSink}, device::Device, packet::Packet};
+/// # struct MyHandler;
+/// # impl PacketSink for MyHandler {
+/// #     async fn handle(&mut self, _p: Packet) -> anyhow::Result<()> { Ok(()) }
+/// # }
 /// # #[tokio::main] async fn main() -> anyhow::Result<()> {
-/// Capture::from_device(Device::any()).start("capture.pcap").await?;
+/// Capture::from_device(Device::any()).run(MyHandler).await?;
 /// # Ok(()) }
 /// ```
 pub struct Capture {
@@ -73,9 +110,10 @@ impl Capture {
         Self { device }
     }
 
-    /// Start capturing and stream packets into `filename` until the task is
-    /// cancelled or an unrecoverable error occurs.
-    pub async fn start(self, filename: &str) -> anyhow::Result<()> {
+    /// Start capturing and deliver each packet to `sink`.
+    ///
+    /// Runs until the task is cancelled or an unrecoverable error occurs.
+    pub async fn run(self, mut sink: impl PacketSink) -> anyhow::Result<()> {
         // Bump the memlock rlimit for kernels that still use it.
         let rlim = libc::rlimit {
             rlim_cur: libc::RLIM_INFINITY,
@@ -123,9 +161,6 @@ impl Capture {
         let ring_buf = RingBuf::try_from(ebpf.map_mut("DATA").unwrap()).unwrap();
         let mut packet_buffer = AsyncFd::with_interest(ring_buf, Interest::READABLE).unwrap();
 
-        let file = tokio::fs::File::create(filename).await?;
-        let mut file_writer = PcapWriter::new(file).await?;
-
         loop {
             let mut guard = packet_buffer.readable_mut().await?;
             match guard.try_io(|inner| {
@@ -142,8 +177,8 @@ impl Capture {
             }) {
                 Ok(Ok((timestamp_ns, data))) => {
                     let (ts_sec, ts_usec) = ns_to_ts(timestamp_ns);
-                    if let Err(e) = file_writer
-                        .write(&Packet {
+                    if let Err(e) = sink
+                        .handle(Packet {
                             ts_sec,
                             ts_usec,
                             incl_len: data.len() as u32,
@@ -165,5 +200,24 @@ impl Capture {
                 }
             }
         }
+    }
+
+    /// Start capturing and write all packets to `filename` in libpcap format.
+    ///
+    /// This is a convenience wrapper around [`Capture::run`] for the common
+    /// case of writing a `.pcap` file.
+    pub async fn start(self, filename: &str) -> anyhow::Result<()> {
+        struct FileSink {
+            writer: PcapWriter<tokio::fs::File>,
+        }
+        impl PacketSink for FileSink {
+            async fn handle(&mut self, packet: Packet) -> anyhow::Result<()> {
+                self.writer.write(&packet).await?;
+                Ok(())
+            }
+        }
+        let file = tokio::fs::File::create(filename).await?;
+        let writer = PcapWriter::new(file).await?;
+        self.run(FileSink { writer }).await
     }
 }
