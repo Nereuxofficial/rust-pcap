@@ -29,9 +29,8 @@ async fn main() -> anyhow::Result<()> {
         exit(0);
     });
 
-    rust_pcap::capture::Capture::from_device(device)
-        .start(filename)
-        .await?;
+    let mut capture = rust_pcap::capture::Capture::from_device(device);
+    capture.start(filename).await?;
 
     Ok(())
 }

@@ -1,5 +1,3 @@
-use std::process::exit;
-
 use tokio::signal;
 
 #[tokio::main(flavor = "current_thread")]
@@ -12,7 +10,7 @@ async fn main() -> anyhow::Result<()> {
             "Usage: {} <output.pcap> [interface]",
             args.first().unwrap_or(&"rust-pcap".to_string())
         );
-        exit(1);
+        std::process::exit(1);
     }
     let filename = &args[1];
     let device = match args.get(2) {
@@ -23,15 +21,18 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Capturing on {} → {}", device, filename);
 
-    tokio::spawn(async move {
-        signal::ctrl_c().await.unwrap();
-        println!("Exiting...");
-        exit(0);
-    });
+    let mut capture = rust_pcap::capture::Capture::from_device(device);
 
-    rust_pcap::capture::Capture::from_device(device)
-        .start(filename)
-        .await?;
+    tokio::select! {
+        res = capture.start(filename) => { res?; }
+        _ = signal::ctrl_c() => {}
+    }
+
+    let stats = capture.fetch_stats().await?;
+    println!(
+        "\nCapture complete — forwarded: {}, dropped: {}",
+        stats.forwarded, stats.dropped
+    );
 
     Ok(())
 }

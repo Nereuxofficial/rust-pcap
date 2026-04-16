@@ -5,21 +5,37 @@ use core::cmp::min;
 use aya_ebpf::{
     helpers::generated::bpf_ktime_get_ns,
     macros::{map, socket_filter},
-    maps::RingBuf,
+    maps::{Array, RingBuf},
     programs::SkBuffContext,
 };
 use aya_log_ebpf::debug;
 
+/// The shared ring buffer with user space for passing packet data.
 #[map]
 static DATA: RingBuf = RingBuf::with_byte_size(4096 * 4096, 0);
 
+/// Counters for forwarded/dropped packets. 0: forwarded, 1: dropped.
+#[map]
+static COUNTERS: Array<u64> = Array::with_max_entries(2, 0);
+
+/// The largest packet size accepted. 64KB is far beyond the typical MTU.
 const MAX_PACKET_SIZE: usize = 64 * 1024;
 
 #[socket_filter]
 pub fn rust_pcap(ctx: SkBuffContext) -> i64 {
     match try_capture(&ctx) {
-        Ok(()) => 0,
-        Err(_) => 0,
+        Ok(()) => {
+            // These should never fail because the index is definitely valid but if they do we cannot panic in an eBPF context.
+            let current = *COUNTERS.get(0).unwrap_or(&0);
+            let _ = COUNTERS.set(0, current + 1, 0);
+            0
+        }
+        Err(_) => {
+            // These should never fail because the index is definitely valid but if they do we cannot panic in an eBPF context.
+            let current = *COUNTERS.get(1).unwrap_or(&0);
+            let _ = COUNTERS.set(1, current + 1, 0);
+            0
+        }
     }
 }
 
