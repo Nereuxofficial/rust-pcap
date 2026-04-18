@@ -26,19 +26,25 @@ pub fn rust_pcap(ctx: SkBuffContext) -> i64 {
     match try_capture(&ctx) {
         Ok(()) => {
             // These should never fail because the index is definitely valid but if they do we cannot panic in an eBPF context.
-            let current = *COUNTERS.get(0).unwrap_or(&0);
-            let _ = COUNTERS.set(0, current + 1, 0);
+            increment_counter(0);
             0
         }
         Err(_) => {
             // These should never fail because the index is definitely valid but if they do we cannot panic in an eBPF context.
-            let current = *COUNTERS.get(1).unwrap_or(&0);
-            let _ = COUNTERS.set(1, current + 1, 0);
+            increment_counter(1);
             0
         }
     }
 }
 
+/// Increment a counter in the `COUNTERS` map by 1.
+fn increment_counter(idx: u32) {
+    if let Some(current) = COUNTERS.get(idx) {
+        let _ = COUNTERS.set(idx, current + 1, 0);
+    }
+}
+
+/// Try to send headers and packet data from the `SkBuffContext` to the `DATA` map.
 fn try_capture(ctx: &SkBuffContext) -> Result<(), i64> {
     let timestamp_ns = unsafe { bpf_ktime_get_ns() };
 
@@ -68,7 +74,6 @@ fn try_capture(ctx: &SkBuffContext) -> Result<(), i64> {
     };
 
     if ret < 0 {
-        debug!(&ctx, "bpf_skb_load_bytes failed: {}", ret);
         buf.discard(0);
         return Err(ret as i64);
     }
