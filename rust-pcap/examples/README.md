@@ -31,14 +31,6 @@ Press **Ctrl-C** to stop.
 sudo RUST_LOG=info cargo run --example capture -- capture.pcap
 ```
 
-### Inspect the output
-
-```shell
-tcpdump -r capture.pcap
-```
-
-Or open `capture.pcap` directly in [Wireshark](https://www.wireshark.org/).
-
 ### Build and run a release binary
 
 ```shell

@@ -1,17 +1,18 @@
 use std::os::unix::io::AsRawFd;
 
 use aya::{
-    maps::{Array, RingBuf},
+    Ebpf,
+    maps::{Array, MapData, RingBuf},
     programs::SocketFilter,
 };
 use libc::htons;
-use log::{debug, error, warn};
-use socket2::{Domain, Protocol, Type};
+use log::{debug, warn};
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::io::{Interest, unix::AsyncFd};
 
 use crate::{
     EBPF_BYTES, ETH_P_ALL, build_sll_header, detect_ethertype, device::Device, ns_to_ts,
-    packet::Packet, parse_ring_entry, pcap_writer::PcapWriter,
+    packet::Packet, parse_ring_entry,
 };
 
 /// Bind a raw packet socket to a specific network interface by index.
@@ -46,9 +47,12 @@ fn bind_to_interface(socket: &socket2::Socket, ifindex: u32) -> std::io::Result<
     }
 }
 
+/// Statistics about the capture session.
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Default)]
 pub struct Stats {
+    /// Number of packets forwarded to user space.
     pub forwarded: u64,
+    /// Number of packets dropped (e.g. due to ring buffer being full).
     pub dropped: u64,
 }
 
@@ -56,9 +60,6 @@ pub struct Stats {
 ///
 /// Implement this trait to handle packets however you like — print them,
 /// forward them over the network, write them to a database, or anything else.
-///
-/// For the common case of writing to a `.pcap` file, use [`Capture::start`]
-/// which provides a ready-made file-backed implementation.
 ///
 /// # Example
 ///
@@ -76,29 +77,45 @@ pub struct Stats {
 ///     }
 /// }
 ///
-/// let mut capture = Capture::from_device(Device::any());
-/// capture.run(Counter(0)).await?;
+/// let mut capture = Capture::from_device(Device::any()).start().await?;
+/// let mut counter = Counter(0);
+/// loop {
+///     let packet = capture.next_packet().await?;
+///     counter.handle(packet).await?;
+/// }
 /// # Ok(()) }
 /// ```
 #[allow(async_fn_in_trait)]
 pub trait PacketSink {
     /// Called once for every captured packet.
-    ///
-    /// Returning an error logs the packet as dropped and continues the capture.
     async fn handle(&mut self, packet: Packet) -> anyhow::Result<()>;
+}
+
+pub struct Active {
+    ebpf: Ebpf,
+    stat_array: Array<MapData, u64>,
+    packet_buffer: AsyncFd<RingBuf<MapData>>,
+    _sockets: Vec<Socket>,
+}
+
+pub struct Inactive {
+    pub devices: Vec<Device>,
 }
 
 /// Builder for a packet capture session.
 ///
 /// # Examples
 ///
-/// Capture all traffic on `eth0` and write it to `capture.pcap`:
+/// Capture all traffic on `eth0`:
 /// ```no_run
 /// # use rust_pcap::{capture::Capture, device::Device};
 /// # #[tokio::main] async fn main() -> anyhow::Result<()> {
 /// let dev = Device::lookup("eth0")?;
-/// let mut capture = Capture::from_device(dev);
-/// capture.start("capture.pcap").await?;
+/// let mut capture = Capture::from_device(dev).start().await?;
+///
+/// while let Ok(packet) = capture.next_packet().await {
+///     println!("Captured packet: {} bytes", packet.data.len());
+/// }
 /// # Ok(()) }
 /// ```
 ///
@@ -110,28 +127,60 @@ pub trait PacketSink {
 /// #     async fn handle(&mut self, _p: Packet) -> anyhow::Result<()> { Ok(()) }
 /// # }
 /// # #[tokio::main] async fn main() -> anyhow::Result<()> {
-/// let mut capture = Capture::from_device(Device::any());
-/// capture.run(MyHandler).await?;
+/// let mut capture = Capture::from_device(Device::any()).start().await?;
+/// let mut handler = MyHandler;
+///
+/// while let Ok(packet) = capture.next_packet().await {
+///     handler.handle(packet).await?;
+/// }
 /// # Ok(()) }
 /// ```
-pub struct Capture {
-    device: Device,
-    bpf: aya::Ebpf,
+pub struct Capture<State> {
+    state: State,
 }
 
-impl Capture {
+impl Capture<Inactive> {
     /// Create a [`Capture`] targeting the given [`Device`].
     pub fn from_device(device: Device) -> Self {
         Self {
-            device,
-            bpf: aya::Ebpf::load(EBPF_BYTES).unwrap(),
+            state: Inactive {
+                devices: vec![device],
+            },
         }
     }
 
     /// Start capturing and deliver each packet to `sink`.
     ///
     /// Runs until the task is cancelled or an unrecoverable error occurs.
-    pub async fn run(&mut self, mut sink: impl PacketSink) -> anyhow::Result<()> {
+    pub async fn start(self) -> anyhow::Result<Capture<Active>> {
+        let sockets: Vec<_> = self
+            .state
+            .devices
+            .iter()
+            .map(|device| {
+                let socket = socket2::Socket::new(
+                    Domain::PACKET,
+                    Type::DGRAM,
+                    Some(Protocol::from(htons(ETH_P_ALL) as i32)),
+                )
+                .map_err(|e| anyhow::anyhow!("failed to create socket: {e}"))?;
+
+                if let Some(ifindex) = device.ifindex {
+                    bind_to_interface(&socket, ifindex)
+                        .map_err(|e| anyhow::anyhow!("failed to bind to {}: {e}", device.name))?;
+                }
+                Ok(socket)
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok(Capture {
+            state: Active::initialize(sockets)?,
+        })
+    }
+}
+
+impl Active {
+    pub fn initialize(sockets: Vec<Socket>) -> anyhow::Result<Self> {
         // Bump the memlock rlimit for kernels that still use it.
         let rlim = libc::rlimit {
             rlim_cur: libc::RLIM_INFINITY,
@@ -142,43 +191,33 @@ impl Capture {
             debug!("remove limit on locked memory failed, ret is: {ret}");
         }
 
-        match aya_log::EbpfLogger::init(&mut self.bpf) {
-            Err(e) => {
-                warn!("failed to initialize eBPF logger: {e}");
-            }
-            Ok(logger) => {
-                let mut logger = AsyncFd::with_interest(logger, tokio::io::Interest::READABLE)?;
-                tokio::task::spawn(async move {
-                    loop {
-                        let mut guard = logger.readable_mut().await.unwrap();
-                        guard.get_inner_mut().flush();
-                        guard.clear_ready();
-                    }
-                });
-            }
+        let mut ebpf = aya::Ebpf::load(EBPF_BYTES).unwrap();
+
+        let program: &mut SocketFilter = ebpf.program_mut("rust_pcap").unwrap().try_into()?;
+        program.load()?;
+        for socket in &sockets {
+            program.attach(socket)?;
         }
 
-        let socket = socket2::Socket::new(
-            Domain::PACKET,
-            Type::DGRAM,
-            Some(Protocol::from(htons(ETH_P_ALL) as i32)),
-        )
-        .map_err(|e| anyhow::anyhow!("failed to create socket: {e}"))?;
+        let ring_buf = RingBuf::try_from(ebpf.take_map("DATA").unwrap()).unwrap();
+        let packet_buffer = AsyncFd::with_interest(ring_buf, Interest::READABLE).unwrap();
+        let stat_array = Array::try_from(ebpf.take_map("COUNTERS").unwrap())?;
+        Ok(Active {
+            ebpf,
+            stat_array,
+            packet_buffer,
+            _sockets: sockets,
+        })
+    }
+}
 
-        if let Some(ifindex) = self.device.ifindex {
-            bind_to_interface(&socket, ifindex)
-                .map_err(|e| anyhow::anyhow!("failed to bind to {}: {e}", self.device.name))?;
-        }
-
-        let prog: &mut SocketFilter = self.bpf.program_mut("rust_pcap").unwrap().try_into()?;
-        prog.load()?;
-        prog.attach(&socket)?;
-
-        let ring_buf = RingBuf::try_from(self.bpf.map_mut("DATA").unwrap()).unwrap();
-        let mut packet_buffer = AsyncFd::with_interest(ring_buf, Interest::READABLE).unwrap();
-
+impl Capture<Active> {
+    /// Fetch the next captured packet.
+    ///
+    /// This method is asynchronous and will wait until a packet is available.
+    pub async fn next_packet(&mut self) -> anyhow::Result<Packet> {
         loop {
-            let mut guard = packet_buffer.readable_mut().await?;
+            let mut guard = self.state.packet_buffer.readable_mut().await?;
             match guard.try_io(|inner| {
                 let ringbuf_entry = inner
                     .get_mut()
@@ -193,23 +232,20 @@ impl Capture {
             }) {
                 Ok(Ok((timestamp_ns, data))) => {
                     let (ts_sec, ts_usec) = ns_to_ts(timestamp_ns);
-                    if let Err(e) = sink
-                        .handle(Packet {
-                            ts_sec,
-                            ts_usec,
-                            incl_len: data.len() as u32,
-                            orig_len: data.len() as u32,
-                            data,
-                        })
-                        .await
-                    {
-                        error!("Packet dropped: {e}");
-                    }
+                    return Ok(Packet {
+                        ts_sec,
+                        ts_usec,
+                        incl_len: data.len() as u32,
+                        orig_len: data.len() as u32,
+                        data,
+                    });
                 }
                 Ok(Err(e)) => {
                     if e.kind() != std::io::ErrorKind::WouldBlock {
                         warn!("Unexpected try_io error: {e:?}");
+                        return Err(anyhow::anyhow!(e));
                     }
+                    // If it's WouldBlock, we just fall through and loop
                 }
                 Err(_e) => {
                     // WouldBlock handled by try_io mechanism to clear ready flag.
@@ -218,31 +254,23 @@ impl Capture {
         }
     }
 
-    /// Start capturing and write all packets to `filename` in libpcap format.
-    ///
-    /// This is a convenience wrapper around [`Capture::run`] for the common
-    /// case of writing a `.pcap` file.
-    pub async fn start(&mut self, filename: &str) -> anyhow::Result<()> {
-        struct FileSink {
-            writer: PcapWriter<tokio::fs::File>,
-        }
-        impl PacketSink for FileSink {
-            async fn handle(&mut self, packet: Packet) -> anyhow::Result<()> {
-                self.writer.write(&packet).await?;
-                Ok(())
-            }
-        }
-        let file = tokio::fs::File::create(filename).await?;
-        let writer = PcapWriter::new(file).await?;
-        self.run(FileSink { writer }).await
+    /// Stop capturing and unload the eBPF program.
+    pub fn stop(mut self) -> anyhow::Result<()> {
+        let program: &mut SocketFilter = self
+            .state
+            .ebpf
+            .program_mut("rust_pcap")
+            .unwrap()
+            .try_into()?;
+        program.unload()?;
+        Ok(())
     }
 
     /// Fetch current packet counters from the eBPF map.
-    pub async fn fetch_stats(&mut self) -> anyhow::Result<Stats> {
-        let stat_array = Array::try_from(self.bpf.map_mut("COUNTERS").unwrap())?;
+    pub fn fetch_stats(&mut self) -> anyhow::Result<Stats> {
         let stats = Stats {
-            forwarded: stat_array.get(&0, 0).unwrap_or(0),
-            dropped: stat_array.get(&1, 0).unwrap_or(0),
+            forwarded: self.state.stat_array.get(&0, 0).unwrap_or(0),
+            dropped: self.state.stat_array.get(&1, 0).unwrap_or(0),
         };
         Ok(stats)
     }

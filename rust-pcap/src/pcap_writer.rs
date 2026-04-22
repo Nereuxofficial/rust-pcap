@@ -2,6 +2,25 @@ use tokio::io::AsyncWriteExt;
 
 use crate::packet::Packet;
 
+/// A writer for standard `libpcap` format files.
+///
+/// It writes a global header on creation and then packet records.
+///
+/// # Example
+///
+/// ```no_run
+/// # use rust_pcap::{capture::Capture, device::Device, pcap_writer::PcapWriter};
+/// # use tokio::fs::File;
+/// # #[tokio::main] async fn main() -> anyhow::Result<()> {
+/// let file = File::create("capture.pcap").await?;
+/// let mut writer = PcapWriter::new(file).await?;
+/// let mut capture = Capture::from_device(Device::any()).start().await?;
+///
+/// if let Ok(packet) = capture.next_packet().await {
+///     writer.write(&packet).await?;
+/// }
+/// # Ok(()) }
+/// ```
 pub struct PcapWriter<W> {
     writer: W,
 }
