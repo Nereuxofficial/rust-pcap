@@ -8,7 +8,6 @@ use aya_ebpf::{
     maps::{Array, RingBuf},
     programs::SkBuffContext,
 };
-use aya_log_ebpf::debug;
 
 /// The shared ring buffer with user space for passing packet data.
 #[map]

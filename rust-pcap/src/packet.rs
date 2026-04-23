@@ -1,5 +1,6 @@
 use tokio::io::AsyncWriteExt;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Packet {
     pub ts_sec: u32,
     pub ts_usec: u32,

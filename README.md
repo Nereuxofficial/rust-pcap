@@ -29,24 +29,45 @@ use rust_pcap::{capture::Capture, device::Device};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let dev = Device::lookup("eth0")?;
-    Capture::from_device(dev).start("capture.pcap").await?;
+    let mut capture = Capture::from_device(dev).start().await?;
+    
+    while let Ok(packet) = capture.next_packet().await {
+        println!("Received packet with length: {}", packet.data.len());
+    }
     Ok(())
 }
 ```
 
-### Capture from all interfaces
+### Capture to a file
 
 ```rust
-use rust_pcap::{capture::Capture, device::Device};
+use rust_pcap::{capture::Capture, device::Device, pcap_writer::PcapWriter};
+use tokio::fs::File;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    Capture::from_device(Device::any()).start("capture.pcap").await?;
+    let file = File::create("capture.pcap").await?;
+    let mut writer = PcapWriter::new(file).await?;
+    let mut capture = Capture::from_device(Device::any()).start().await?;
+
+    for _ in 0..10 {
+        let packet = capture.next_packet().await?;
+        writer.write(&packet).await?;
+    }
     Ok(())
 }
 ```
 
 The output file is standard `libpcap` format and can be opened directly in [Wireshark](https://www.wireshark.org/) or inspected with `tcpdump -r capture.pcap`.
+
+### Fetching stats
+
+You can fetch capture statistics (forwarded and dropped packets) at any time:
+
+```rust
+let stats = capture.fetch_stats()?;
+println!("Forwarded: {}, Dropped: {}", stats.forwarded, stats.dropped);
+```
 
 ---
 
@@ -70,7 +91,7 @@ A ready-to-use capture CLI is provided in [`rust-pcap/examples/capture.rs`](rust
 Cross-compilation works on both Intel and Apple Silicon Macs.
 
 ```shell
-CC=${ARCH}-linux-musl-gcc cargo build --package rust-pcap --release \
+CC=${ARCH}-linux-musl-gcc cargo build --package rust-pcap --example capture --release \
   --target=${ARCH}-unknown-linux-musl \
   --config=target.${ARCH}-unknown-linux-musl.linker=\"${ARCH}-linux-musl-gcc\"
 ```
@@ -78,8 +99,8 @@ CC=${ARCH}-linux-musl-gcc cargo build --package rust-pcap --release \
 Copy the resulting binary to a Linux server or VM and run it there:
 
 ```shell
-scp target/${ARCH}-unknown-linux-musl/release/rust-pcap user@host:~/
-ssh user@host sudo ./rust-pcap capture.pcap
+scp target/${ARCH}-unknown-linux-musl/release/examples/capture user@host:~/
+ssh user@host sudo ./capture capture.pcap
 ```
 
 ---

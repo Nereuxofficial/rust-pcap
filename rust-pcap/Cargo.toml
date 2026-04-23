@@ -42,7 +42,3 @@ cargo_metadata = { workspace = true }
 # workflows with stable cargo; stable cargo outright refuses to load manifests that use unstable
 # features.
 rust-pcap-ebpf = { path = "../rust-pcap-ebpf" }
-
-[[bin]]
-name = "rust-pcap"
-path = "src/main.rs"
