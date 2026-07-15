@@ -1,5 +1,6 @@
 [package]
 name = "rust-pcap-common"
+description = "Utility crate for rust-pcap"
 version = "0.1.0"
 edition.workspace = true
 
